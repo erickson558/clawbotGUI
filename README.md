@@ -28,6 +28,7 @@
 - Logging con timestamp y escritura atómica de configuración.
 - Llamadas a procesos en modo silencioso usando `CREATE_NO_WINDOW`.
 - Resolución robusta del ejecutable de OpenClaw en Windows, incluyendo shims `.cmd` de npm.
+- Ejecución oculta de wrappers `.cmd` y `.bat` de OpenClaw en Windows, manteniendo la salida integrada en la bitácora de la GUI.
 
 ## Estructura
 
@@ -44,7 +45,7 @@
 
 La aplicación usa `config.json` en la misma carpeta del `.py` o `.exe`. Si no existe, lo crea automáticamente con valores seguros por defecto. El archivo de referencia está en [`config.example.json`](config.example.json).
 
-En Windows, el campo `Comando OpenClaw` acepta `openclaw`, `openclaw.cmd`, `npx openclaw` o una ruta completa al ejecutable. La aplicación intenta resolver automáticamente los shims `.cmd` típicos de npm.
+En Windows, el campo `Comando OpenClaw` acepta `openclaw`, `openclaw.cmd`, `npx openclaw` o una ruta completa al ejecutable. La aplicación intenta resolver automáticamente los shims `.cmd` típicos de npm y los ejecuta en modo oculto para que no aparezca ninguna consola separada.
 
 ## Ejecución local
 
@@ -59,7 +60,7 @@ python -m pip install -r requirements.txt
 .\build.ps1
 ```
 
-El ejecutable se genera como `clawbotGUI.exe` en la raíz del proyecto, sin ventana de consola.
+El ejecutable se genera como `clawbotGUI.exe` en la raíz del proyecto, sin ventana de consola. Del mismo modo, los procesos de OpenClaw lanzados desde la app mantienen su salida dentro de la bitácora visual.
 
 ## Versionado
 

@@ -49,8 +49,7 @@ class OpenClawService:
                 text=True,
                 stderr=subprocess.STDOUT,
                 timeout=10,
-                stdin=subprocess.DEVNULL,
-                creationflags=CREATE_NO_WINDOW,
+                **self._base_process_kwargs(),
             )
         except (OSError, subprocess.SubprocessError):
             return None
@@ -76,15 +75,14 @@ class OpenClawService:
     def restart_gateway(self) -> None:
         self.logger.info(">>> Reinicio rápido de OpenClaw")
         try:
+            stop_command = self._prepare_command(self._command_with_args("gateway", "stop"))
             subprocess.run(
-                self._command_with_args("gateway", "stop"),
+                stop_command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
                 timeout=20,
                 check=False,
-                shell=False,
-                creationflags=CREATE_NO_WINDOW,
+                **self._base_process_kwargs(),
             )
             time.sleep(2)
             pid = self.get_pid_by_port(self.gateway_port)
@@ -174,15 +172,14 @@ class OpenClawService:
 
     def _stream_command(self, command: list[str], label: str) -> None:
         self.logger.info(">>> %s: %s", label, " ".join(command))
+        prepared_command = self._prepare_command(command)
         try:
             proc = subprocess.Popen(
-                command,
+                prepared_command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
                 text=True,
-                shell=False,
-                creationflags=CREATE_NO_WINDOW,
+                **self._base_process_kwargs(),
             )
         except FileNotFoundError as exc:
             self.logger.error(">>> ERROR en %s: %s", label, exc)
@@ -207,12 +204,34 @@ class OpenClawService:
             ["taskkill", "/PID", str(pid), "/F"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
             timeout=20,
             check=False,
-            shell=False,
-            creationflags=CREATE_NO_WINDOW,
+            **self._base_process_kwargs(),
         )
+
+    def _prepare_command(self, command: list[str]) -> list[str]:
+        if os.name != "nt":
+            return command
+
+        suffix = Path(command[0]).suffix.lower()
+        if suffix not in {".cmd", ".bat"}:
+            return command
+
+        return ["cmd.exe", "/d", "/s", "/c", subprocess.list2cmdline(command)]
+
+    @staticmethod
+    def _base_process_kwargs() -> dict[str, object]:
+        kwargs: dict[str, object] = {
+            "stdin": subprocess.DEVNULL,
+            "shell": False,
+        }
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            kwargs["startupinfo"] = startupinfo
+            kwargs["creationflags"] = CREATE_NO_WINDOW
+        return kwargs
 
     @staticmethod
     def _extract_port(address: str) -> int | None:

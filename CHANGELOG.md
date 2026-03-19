@@ -1,5 +1,11 @@
 # Changelog
 
+## V0.0.5 - 2026-03-19
+
+- Corrección del arranque de OpenClaw en Windows para ejecutar shims `.cmd` y `.bat` mediante `cmd.exe` oculto.
+- Refuerzo de `CREATE_NO_WINDOW` y `STARTUPINFO` para evitar cualquier ventana CLI visible al iniciar, detener o reiniciar OpenClaw.
+- Validación funcional contra el binario real de OpenClaw, manteniendo la salida embebida en la bitácora de la GUI.
+
 ## V0.0.4 - 2026-03-19
 
 - Corrección del arranque de OpenClaw en Windows resolviendo automáticamente ejecutables `.cmd`, `.bat` y rutas completas.
