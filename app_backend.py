@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import time
@@ -13,6 +15,7 @@ import webbrowser
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 PORT_PATTERN = re.compile(r":(\d+)$")
+WINDOWS_EXECUTABLE_SUFFIXES = (".cmd", ".bat", ".exe", ".com")
 
 
 class OpenClawService:
@@ -123,7 +126,51 @@ class OpenClawService:
         base = shlex.split(self.command, posix=os.name != "nt")
         if not base:
             raise ValueError("El comando OpenClaw no es válido.")
+        base[0] = self._resolve_executable(base[0])
         return base + list(extra_args)
+
+    def _resolve_executable(self, executable: str) -> str:
+        candidate = executable.strip().strip('"')
+        if not candidate:
+            raise ValueError("El ejecutable configurado está vacío.")
+
+        expanded = Path(os.path.expandvars(os.path.expanduser(candidate)))
+
+        direct_match = self._find_local_executable(expanded)
+        if direct_match is not None:
+            return str(direct_match)
+
+        path_match = shutil.which(candidate)
+        if path_match:
+            return path_match
+
+        if os.name == "nt" and expanded.suffix == "":
+            for suffix in WINDOWS_EXECUTABLE_SUFFIXES:
+                path_match = shutil.which(candidate + suffix)
+                if path_match:
+                    return path_match
+
+        raise FileNotFoundError(
+            "No se encontró el ejecutable configurado. "
+            f"Valor actual: '{self.command}'. "
+            "En Windows, si OpenClaw fue instalado con npm, la app intentará resolver "
+            "automáticamente 'openclaw.cmd'. Si sigue fallando, configura la ruta completa "
+            "del ejecutable en el campo 'Comando OpenClaw'."
+        )
+
+    @staticmethod
+    def _find_local_executable(candidate: Path) -> Path | None:
+        if candidate.is_file():
+            return candidate.resolve()
+
+        if os.name != "nt" or candidate.suffix:
+            return None
+
+        for suffix in WINDOWS_EXECUTABLE_SUFFIXES:
+            suffixed = candidate.with_suffix(suffix)
+            if suffixed.is_file():
+                return suffixed.resolve()
+        return None
 
     def _stream_command(self, command: list[str], label: str) -> None:
         self.logger.info(">>> %s: %s", label, " ".join(command))
@@ -137,6 +184,9 @@ class OpenClawService:
                 shell=False,
                 creationflags=CREATE_NO_WINDOW,
             )
+        except FileNotFoundError as exc:
+            self.logger.error(">>> ERROR en %s: %s", label, exc)
+            return
         except Exception as exc:
             self.logger.exception(">>> ERROR en %s: %s", label, exc)
             return

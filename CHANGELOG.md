@@ -1,5 +1,11 @@
 # Changelog
 
+## V0.0.4 - 2026-03-19
+
+- Corrección del arranque de OpenClaw en Windows resolviendo automáticamente ejecutables `.cmd`, `.bat` y rutas completas.
+- Mensajes de error más claros cuando el comando configurado no existe.
+- Documentación actualizada para el uso del campo `Comando OpenClaw`.
+
 ## V0.0.3 - 2026-03-19
 
 - Reorganización completa del espacio central usando pestañas para comandos, configuración y bitácora.

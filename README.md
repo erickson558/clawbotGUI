@@ -27,6 +27,7 @@
 - Botones visuales con iconos generados en runtime.
 - Logging con timestamp y escritura atómica de configuración.
 - Llamadas a procesos en modo silencioso usando `CREATE_NO_WINDOW`.
+- Resolución robusta del ejecutable de OpenClaw en Windows, incluyendo shims `.cmd` de npm.
 
 ## Estructura
 
@@ -42,6 +43,8 @@
 ## Configuración
 
 La aplicación usa `config.json` en la misma carpeta del `.py` o `.exe`. Si no existe, lo crea automáticamente con valores seguros por defecto. El archivo de referencia está en [`config.example.json`](config.example.json).
+
+En Windows, el campo `Comando OpenClaw` acepta `openclaw`, `openclaw.cmd`, `npx openclaw` o una ruta completa al ejecutable. La aplicación intenta resolver automáticamente los shims `.cmd` típicos de npm.
 
 ## Ejecución local
 
