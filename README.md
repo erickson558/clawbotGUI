@@ -33,6 +33,7 @@
 - Resolución robusta del ejecutable de OpenClaw en Windows, incluyendo shims `.cmd` de npm.
 - Ejecución oculta de wrappers `.cmd` y `.bat` de OpenClaw en Windows, manteniendo la salida integrada en la bitácora de la GUI.
 - Protección contra clics repetidos en operaciones largas para evitar acciones paralelas duplicadas.
+- Detección de estado alineada con el proceso real de OpenClaw, incluso si el puerto efectivo no coincide con el configurado en la GUI.
 
 ## Estructura
 

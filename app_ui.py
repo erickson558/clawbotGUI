@@ -1044,7 +1044,16 @@ class OpenClawManagerApp:
         self.runtime_pid_var.set(str(status["pid"] or "-"))
         self.app_status_value.configure(fg="#2FE4A7" if is_running else "#FF6B6B")
         if show_feedback:
-            self.set_status_message(self.tr("status_active") if is_running else self.tr("status_stopped"))
+            if is_running and bool(status.get("port_mismatch")):
+                self.set_status_message(
+                    self.tr(
+                        "status_active_mismatch",
+                        port=status["port"],
+                        configured=status.get("configured_port", status["port"]),
+                    )
+                )
+            else:
+                self.set_status_message(self.tr("status_active") if is_running else self.tr("status_stopped"))
         self._status_refresh_in_progress = False
 
     def _reset_status_refresh_flag(self) -> None:

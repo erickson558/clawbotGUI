@@ -1,5 +1,11 @@
 # Changelog
 
+## V0.0.7 - 2026-03-19
+
+- Corrección de la detección de estado para que la GUI identifique el gateway real aunque OpenClaw esté escuchando en un puerto distinto al configurado manualmente.
+- La tarjeta de estado ahora muestra puerto y PID efectivos del proceso detectado.
+- La barra de estado informa cuando el gateway está activo en un puerto diferente al definido en `config.json`.
+
 ## V0.0.6 - 2026-03-19
 
 - Reorganización de la pestaña `Comandos` para que no se corte visualmente, usando una distribución más compacta y scroll seguro.

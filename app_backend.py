@@ -39,10 +39,32 @@ class OpenClawService:
 
     def get_status(self) -> dict[str, object]:
         running = self.is_port_open("127.0.0.1", self.gateway_port)
+        if running:
+            return {
+                "running": True,
+                "port": self.gateway_port,
+                "pid": self.get_pid_by_port(self.gateway_port),
+                "configured_port": self.gateway_port,
+                "port_mismatch": False,
+            }
+
+        detected_runtime = self._detect_gateway_runtime()
+        if detected_runtime is not None:
+            actual_port = int(detected_runtime["port"])
+            return {
+                "running": True,
+                "port": actual_port,
+                "pid": str(detected_runtime["pid"]),
+                "configured_port": self.gateway_port,
+                "port_mismatch": actual_port != self.gateway_port,
+            }
+
         return {
-            "running": running,
+            "running": False,
             "port": self.gateway_port,
-            "pid": self.get_pid_by_port(self.gateway_port) if running else None,
+            "pid": None,
+            "configured_port": self.gateway_port,
+            "port_mismatch": False,
         }
 
     def is_port_open(self, host: str, port: int) -> bool:
@@ -296,23 +318,27 @@ class OpenClawService:
         if pid:
             pids.add(pid)
         if os.name == "nt":
-            pids.update(self._find_gateway_process_ids())
+            pids.update({item["pid"] for item in self._find_gateway_processes()})
         return pids
 
-    def _find_gateway_process_ids(self) -> set[str]:
+    def _find_gateway_processes(self) -> list[dict[str, str | int | None]]:
         if os.name != "nt":
-            return set()
+            return []
 
         script = rf"""
 $pattern = 'node_modules\\openclaw\\dist\\index\.js gateway'
-$portPattern = '--port\s+{self.gateway_port}(\s|$)'
 Get-CimInstance Win32_Process |
     Where-Object {{
         $_.Name -eq 'node.exe' -and
-        $_.CommandLine -match $pattern -and
-        $_.CommandLine -match $portPattern
+        $_.CommandLine -match $pattern
     }} |
-    Select-Object -ExpandProperty ProcessId
+    ForEach-Object {{
+        $port = ''
+        if ($_.CommandLine -match '--port\s+(\d+)') {{
+            $port = $matches[1]
+        }}
+        '{{0}}|{{1}}' -f $_.ProcessId, $port
+    }}
 """
         try:
             output = subprocess.check_output(
@@ -323,9 +349,36 @@ Get-CimInstance Win32_Process |
                 **self._base_process_kwargs(),
             )
         except (OSError, subprocess.SubprocessError):
-            return set()
+            return []
 
-        return {line.strip() for line in output.splitlines() if line.strip().isdigit()}
+        processes: list[dict[str, str | int | None]] = []
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            pid_text, _, port_text = line.partition("|")
+            if not pid_text.isdigit():
+                continue
+            processes.append(
+                {
+                    "pid": pid_text,
+                    "port": int(port_text) if port_text.isdigit() else None,
+                }
+            )
+        return processes
+
+    def _detect_gateway_runtime(self) -> dict[str, str | int] | None:
+        for process in self._find_gateway_processes():
+            port = process.get("port")
+            pid = process.get("pid")
+            if port is None or pid is None:
+                continue
+            if self.is_port_open("127.0.0.1", int(port)):
+                return {
+                    "pid": str(pid),
+                    "port": int(port),
+                }
+        return None
 
     def _wait_for_gateway_shutdown(self, timeout_seconds: float) -> bool:
         deadline = time.monotonic() + timeout_seconds
