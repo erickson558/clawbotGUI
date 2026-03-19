@@ -9,7 +9,10 @@ if (-not $icon) {
 }
 
 $entryPoint = Join-Path $projectRoot "clawbotmanayer.py"
-$buildPath = Join-Path $projectRoot "build"
+$specPath = Join-Path $projectRoot "build"
+$workPath = Join-Path $env:TEMP ("clawbotGUI-pyinstaller-" + (Get-Date -Format "yyyyMMddHHmmss"))
+
+New-Item -ItemType Directory -Force -Path $specPath | Out-Null
 
 python -m PyInstaller `
   --noconfirm `
@@ -19,8 +22,12 @@ python -m PyInstaller `
   --name "clawbotGUI" `
   --icon $icon.FullName `
   --distpath $projectRoot `
-  --workpath $buildPath `
-  --specpath $buildPath `
+  --workpath $workPath `
+  --specpath $specPath `
   $entryPoint
+
+if (Test-Path $workPath) {
+    Remove-Item -LiteralPath $workPath -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host "Compilación finalizada. EXE generado en: $projectRoot\\clawbotGUI.exe"

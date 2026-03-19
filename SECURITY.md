@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-La versión activa soportada actualmente es `V0.0.1`.
+La versión activa soportada actualmente es `V0.0.3`.
 
 ## Runtime Security Notes
 

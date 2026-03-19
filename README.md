@@ -10,6 +10,8 @@
 - Libera el puerto configurado sin abrir ventanas de consola.
 - Muestra actividad en una bitácora visual y la escribe en `log.txt`.
 - Soporta español e inglés.
+- Reorganiza la experiencia en pestañas para que toda la GUI siga siendo usable incluso con contenido adicional.
+- Usa botones con iconografía integrada para reforzar las acciones principales.
 
 ## Mejoras implementadas
 
@@ -20,6 +22,9 @@
 - Autoinicio opcional del proceso.
 - Autocierre configurable con countdown en la barra de estado.
 - Menú superior con About y atajos de teclado.
+- Navegación por pestañas para separar comandos, configuración y bitácora.
+- Panel de configuración con scroll para no perder controles por altura de ventana.
+- Botones visuales con iconos generados en runtime.
 - Logging con timestamp y escritura atómica de configuración.
 - Llamadas a procesos en modo silencioso usando `CREATE_NO_WINDOW`.
 
@@ -31,6 +36,7 @@
 - [`app_config.py`](app_config.py): lectura, validación y guardado de `config.json`.
 - [`app_logging.py`](app_logging.py): `log.txt` y cola de mensajes para la GUI.
 - [`app_i18n.py`](app_i18n.py): idiomas.
+- [`app_icons.py`](app_icons.py): iconos de acciones generados en runtime.
 - [`build.ps1`](build.ps1): compilación a `.exe`.
 
 ## Configuración
