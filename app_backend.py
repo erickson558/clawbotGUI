@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 import os
 from pathlib import Path
@@ -16,11 +17,18 @@ import webbrowser
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 PORT_PATTERN = re.compile(r":(\d+)$")
 WINDOWS_EXECUTABLE_SUFFIXES = (".cmd", ".bat", ".exe", ".com")
+WINDOWS_GATEWAY_TASK_NAME = "OpenClaw Gateway"
 
 
 class OpenClawService:
-    def __init__(self, logger: logging.Logger, settings: dict[str, object]) -> None:
+    def __init__(
+        self,
+        logger: logging.Logger,
+        settings: dict[str, object],
+        console_callback: Callable[[str], None] | None = None,
+    ) -> None:
         self.logger = logger
+        self.console_callback = console_callback
         self.reload_settings(settings)
 
     def reload_settings(self, settings: dict[str, object]) -> None:
@@ -66,15 +74,25 @@ class OpenClawService:
     def start_gateway(self) -> None:
         if self.is_port_open("127.0.0.1", self.gateway_port):
             self.logger.info("OpenClaw ya parece estar activo.")
+            self._emit_console_line("OpenClaw ya parece estar activo.")
             return
         self._stream_command(self._command_with_args("gateway", "start"), "Iniciar OpenClaw")
 
     def stop_gateway(self) -> None:
+        if os.name == "nt":
+            self._stop_gateway_windows_fast()
+            return
         self._stream_command(self._command_with_args("gateway", "stop"), "Detener OpenClaw")
 
     def restart_gateway(self) -> None:
         self.logger.info(">>> Reinicio rápido de OpenClaw")
         try:
+            if os.name == "nt":
+                self._stop_gateway_windows_fast()
+                time.sleep(1)
+                self._stream_command(self._command_with_args("gateway", "start"), "Reiniciar OpenClaw")
+                return
+
             stop_command = self._prepare_command(self._command_with_args("gateway", "stop"))
             subprocess.run(
                 stop_command,
@@ -99,12 +117,17 @@ class OpenClawService:
             self.logger.exception(">>> ERROR al reiniciar: %s", exc)
 
     def kill_gateway_process(self) -> None:
-        pid = self.get_pid_by_port(self.gateway_port)
-        if not pid:
+        if os.name == "nt":
+            self._end_windows_task(WINDOWS_GATEWAY_TASK_NAME)
+        pids = self._collect_gateway_process_ids()
+        if not pids:
             self.logger.info("No hay proceso ocupando el puerto %s.", self.gateway_port)
+            self._emit_console_line(f"No hay proceso ocupando el puerto {self.gateway_port}.")
             return
-        self._run_taskkill(pid)
-        self.logger.info("Proceso PID %s finalizado.", pid)
+        for pid in sorted(pids):
+            self._run_taskkill(pid)
+        self.logger.info("Procesos finalizados: %s", ", ".join(sorted(pids)))
+        self._emit_console_line(f"Procesos finalizados: {', '.join(sorted(pids))}")
 
     def open_dashboard(self) -> None:
         if not self._is_safe_http_url(self.dashboard_url):
@@ -172,6 +195,7 @@ class OpenClawService:
 
     def _stream_command(self, command: list[str], label: str) -> None:
         self.logger.info(">>> %s: %s", label, " ".join(command))
+        self._emit_console_line(f"$ {' '.join(command)}")
         prepared_command = self._prepare_command(command)
         try:
             proc = subprocess.Popen(
@@ -183,21 +207,64 @@ class OpenClawService:
             )
         except FileNotFoundError as exc:
             self.logger.error(">>> ERROR en %s: %s", label, exc)
+            self._emit_console_line(f"ERROR: {exc}")
             return
         except Exception as exc:
             self.logger.exception(">>> ERROR en %s: %s", label, exc)
+            self._emit_console_line(f"ERROR: {exc}")
             return
 
         try:
             if proc.stdout is not None:
                 for line in iter(proc.stdout.readline, ""):
                     if line:
-                        self.logger.info(line.rstrip())
+                        cleaned = line.rstrip()
+                        self.logger.info(cleaned)
+                        self._emit_console_line(cleaned)
                 proc.stdout.close()
             return_code = proc.wait()
             self.logger.info(">>> %s finalizado con código %s", label, return_code)
+            self._emit_console_line(f"[{label}] código de salida: {return_code}")
         except Exception as exc:
             self.logger.exception(">>> ERROR en %s: %s", label, exc)
+            self._emit_console_line(f"ERROR: {exc}")
+
+    def _stop_gateway_windows_fast(self) -> None:
+        command = self._command_with_args("gateway", "stop")
+        self.logger.info(">>> Detener OpenClaw: %s", " ".join(command))
+        self._emit_console_line(f"$ {' '.join(command)}")
+
+        task_ended = self._end_windows_task(WINDOWS_GATEWAY_TASK_NAME)
+        if task_ended:
+            self.logger.info(">>> Tarea programada '%s' finalizada.", WINDOWS_GATEWAY_TASK_NAME)
+            self._emit_console_line(f"Tarea programada '{WINDOWS_GATEWAY_TASK_NAME}' finalizada.")
+
+        pids = self._collect_gateway_process_ids()
+        if pids:
+            self.logger.info(">>> Finalizando procesos del gateway: %s", ", ".join(sorted(pids)))
+            self._emit_console_line(f"Finalizando procesos del gateway: {', '.join(sorted(pids))}")
+            for pid in sorted(pids):
+                self._run_taskkill(pid)
+
+        if self._wait_for_gateway_shutdown(timeout_seconds=3.0):
+            self.logger.info(">>> Detener OpenClaw finalizado con código 0")
+            self._emit_console_line("[Detener OpenClaw] código de salida: 0")
+            return
+
+        self.logger.warning(">>> La detención rápida no liberó el gateway. Ejecutando parada estándar...")
+        self._emit_console_line("La detención rápida no liberó el gateway. Ejecutando parada estándar...")
+        self._stream_command(command, "Detener OpenClaw (respaldo)")
+
+        residual_pids = self._collect_gateway_process_ids()
+        if residual_pids:
+            self.logger.warning(">>> Persisten procesos del gateway: %s", ", ".join(sorted(residual_pids)))
+            self._emit_console_line(f"Persisten procesos del gateway: {', '.join(sorted(residual_pids))}")
+            for pid in sorted(residual_pids):
+                self._run_taskkill(pid)
+
+        finished = self._wait_for_gateway_shutdown(timeout_seconds=2.0)
+        self.logger.info(">>> Detener OpenClaw finalizado con código %s", 0 if finished else 1)
+        self._emit_console_line(f"[Detener OpenClaw] código de salida: {0 if finished else 1}")
 
     def _run_taskkill(self, pid: str) -> None:
         subprocess.run(
@@ -208,6 +275,73 @@ class OpenClawService:
             check=False,
             **self._base_process_kwargs(),
         )
+
+    def _end_windows_task(self, task_name: str) -> bool:
+        if os.name != "nt":
+            return False
+
+        completed = subprocess.run(
+            ["schtasks", "/End", "/TN", task_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+            **self._base_process_kwargs(),
+        )
+        return completed.returncode == 0
+
+    def _collect_gateway_process_ids(self) -> set[str]:
+        pids: set[str] = set()
+        pid = self.get_pid_by_port(self.gateway_port)
+        if pid:
+            pids.add(pid)
+        if os.name == "nt":
+            pids.update(self._find_gateway_process_ids())
+        return pids
+
+    def _find_gateway_process_ids(self) -> set[str]:
+        if os.name != "nt":
+            return set()
+
+        script = rf"""
+$pattern = 'node_modules\\openclaw\\dist\\index\.js gateway'
+$portPattern = '--port\s+{self.gateway_port}(\s|$)'
+Get-CimInstance Win32_Process |
+    Where-Object {{
+        $_.Name -eq 'node.exe' -and
+        $_.CommandLine -match $pattern -and
+        $_.CommandLine -match $portPattern
+    }} |
+    Select-Object -ExpandProperty ProcessId
+"""
+        try:
+            output = subprocess.check_output(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                text=True,
+                stderr=subprocess.STDOUT,
+                timeout=10,
+                **self._base_process_kwargs(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return set()
+
+        return {line.strip() for line in output.splitlines() if line.strip().isdigit()}
+
+    def _wait_for_gateway_shutdown(self, timeout_seconds: float) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if not self._collect_gateway_process_ids() and not self.is_port_open("127.0.0.1", self.gateway_port):
+                return True
+            time.sleep(0.2)
+        return not self._collect_gateway_process_ids() and not self.is_port_open("127.0.0.1", self.gateway_port)
+
+    def _emit_console_line(self, text: str) -> None:
+        if not text or self.console_callback is None:
+            return
+        try:
+            self.console_callback(text.rstrip())
+        except Exception:
+            self.logger.debug("No se pudo enviar salida a la consola embebida.", exc_info=True)
 
     def _prepare_command(self, command: list[str]) -> list[str]:
         if os.name != "nt":

@@ -1,5 +1,13 @@
 # Changelog
 
+## V0.0.6 - 2026-03-19
+
+- Reorganización de la pestaña `Comandos` para que no se corte visualmente, usando una distribución más compacta y scroll seguro.
+- Nueva pestaña `Consola OpenClaw` con salida embebida del proceso en modo silent, evitando depender de una ventana CMD externa.
+- Protección contra clics repetidos en acciones largas para que no se lancen varias tareas `start/stop/restart` en paralelo.
+- Mejora del botón `Detener` en Windows con parada rápida de la tarea programada y cierre directo del proceso del gateway.
+- Blindaje de callbacks en segundo plano para evitar errores al cerrar la GUI mientras aún hay refrescos activos.
+
 ## V0.0.5 - 2026-03-19
 
 - Corrección del arranque de OpenClaw en Windows para ejecutar shims `.cmd` y `.bat` mediante `cmd.exe` oculto.

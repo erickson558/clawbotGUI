@@ -109,14 +109,19 @@ class OpenClawManagerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.configure(bg="#08131D")
-        self.root.minsize(1120, 720)
+        self.root.minsize(1080, 680)
 
         self.log_queue: queue.Queue[str] = queue.Queue()
+        self.console_queue: queue.Queue[str] = queue.Queue()
         self.config_manager = ConfigManager(CONFIG_PATH)
         self.config = self.config_manager.export()
         self.translator = Translator(self.config["language"])
         self.logger = configure_logging(LOG_PATH, self.log_queue)
-        self.service = OpenClawService(self.logger, self.config["openclaw"])
+        self.service = OpenClawService(
+            self.logger,
+            self.config["openclaw"],
+            console_callback=self._enqueue_console_output,
+        )
         self.icon_factory = ButtonIconFactory()
         self.button_icons: dict[str, object | None] = {}
 
@@ -128,6 +133,8 @@ class OpenClawManagerApp:
         self._status_poll_after_id: str | None = None
         self._status_refresh_in_progress = False
         self._countdown_remaining: int | None = None
+        self._active_actions: set[str] = set()
+        self._action_buttons: dict[str, tk.Button] = {}
 
         self._build_variables()
         self._configure_styles()
@@ -260,45 +267,45 @@ class OpenClawManagerApp:
 
         self.banner_canvas = tk.Canvas(
             self.root,
-            height=118,
+            height=96,
             bg="#08131D",
             highlightthickness=0,
             bd=0,
         )
         self.banner_canvas.grid(row=0, column=0, sticky="ew")
-        self.banner_canvas.create_oval(-60, -48, 240, 190, fill="#103B5F", outline="")
-        self.banner_canvas.create_oval(835, -70, 1200, 165, fill="#17A2B8", outline="")
+        self.banner_canvas.create_oval(-50, -42, 220, 160, fill="#103B5F", outline="")
+        self.banner_canvas.create_oval(860, -60, 1210, 150, fill="#17A2B8", outline="")
         self.banner_title_item = self.banner_canvas.create_text(
             34,
-            24,
+            18,
             anchor="nw",
             fill="#F7FBFF",
-            font=("Segoe UI Semibold", 27),
+            font=("Segoe UI Semibold", 25),
             text="",
         )
         self.banner_subtitle_item = self.banner_canvas.create_text(
             36,
-            65,
+            55,
             anchor="nw",
             fill="#C8E3FF",
-            font=("Segoe UI", 12),
+            font=("Segoe UI", 11),
             text="",
         )
         self.banner_version_item = self.banner_canvas.create_text(
             1010,
-            38,
+            32,
             anchor="ne",
             fill="#F7FBFF",
-            font=("Consolas", 12, "bold"),
+            font=("Consolas", 11, "bold"),
             text=APP_VERSION_TAG,
         )
 
-        content = tk.Frame(self.root, bg="#08131D", padx=18, pady=18)
+        content = tk.Frame(self.root, bg="#08131D", padx=16, pady=14)
         content.grid(row=1, column=0, sticky="nsew")
         content.grid_columnconfigure(0, weight=1)
         content.grid_rowconfigure(1, weight=1)
 
-        self.stats_card = self._make_card(content, padding=(18, 16))
+        self.stats_card = self._make_card(content, padding=(16, 14))
         self.stats_card.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         for column_index in range(4):
             self.stats_card.grid_columnconfigure(column_index, weight=1, uniform="stat")
@@ -344,37 +351,82 @@ class OpenClawManagerApp:
 
         self.control_tab = tk.Frame(self.notebook, bg="#08131D", padx=2, pady=2)
         self.settings_tab = tk.Frame(self.notebook, bg="#08131D", padx=2, pady=2)
+        self.console_tab = tk.Frame(self.notebook, bg="#08131D", padx=2, pady=2)
         self.logs_tab = tk.Frame(self.notebook, bg="#08131D", padx=2, pady=2)
 
         self.notebook.add(self.control_tab, text="")
         self.notebook.add(self.settings_tab, text="")
+        self.notebook.add(self.console_tab, text="")
         self.notebook.add(self.logs_tab, text="")
 
-        self.control_tab.grid_columnconfigure(0, weight=1)
-        self.control_tab.grid_rowconfigure(1, weight=1)
+        self.control_scroll = ScrollableFrame(self.control_tab, background="#08131D")
+        self.control_scroll.pack(fill="both", expand=True)
+        self.control_scroll.body.grid_columnconfigure(0, weight=1)
 
-        self.controls_card = self._make_card(self.control_tab)
-        self.controls_card.grid(row=0, column=0, sticky="nsew")
-        for column_index in range(3):
-            self.controls_card.grid_columnconfigure(column_index, weight=1)
+        self.controls_card = self._make_card(self.control_scroll.body, padding=(14, 14))
+        self.controls_card.grid(row=0, column=0, sticky="ew")
+        self.controls_card.grid_columnconfigure(0, weight=1)
 
         self.controls_title = self._card_title(self.controls_card)
-        self.controls_title.grid(row=0, column=0, columnspan=3, sticky="w")
+        self.controls_title.grid(row=0, column=0, sticky="w")
 
-        self.start_button = self._make_action_button(self.controls_card, "start", self.start_openclaw)
-        self.stop_button = self._make_action_button(self.controls_card, "stop", self.stop_openclaw)
-        self.restart_button = self._make_action_button(self.controls_card, "restart", self.restart_openclaw)
-        self.refresh_button = self._make_action_button(self.controls_card, "refresh", lambda: self.refresh_status_async(True))
-        self.dashboard_button = self._make_action_button(self.controls_card, "dashboard", self.open_dashboard)
-        self.browser_button = self._make_action_button(self.controls_card, "browser", self.open_browser_ui)
-        self.kill_button = self._make_action_button(self.controls_card, "kill", self.kill_port_process)
-        self.clear_log_button = self._make_action_button(self.controls_card, "clear", self.clear_log)
-        self.exit_button = self._make_action_button(self.controls_card, "exit", self.on_exit)
+        self.controls_summary = tk.Label(
+            self.controls_card,
+            bg="#F7FBFF",
+            fg="#35506A",
+            font=("Segoe UI", 10),
+            justify="left",
+            anchor="w",
+            wraplength=980,
+        )
+        self.controls_summary.grid(row=1, column=0, sticky="ew", pady=(6, 12))
 
-        buttons = [
-            self.start_button,
-            self.stop_button,
-            self.restart_button,
+        self.primary_actions_title = self._card_subtitle(self.controls_card)
+        self.primary_actions_title.grid(row=2, column=0, sticky="w", pady=(0, 6))
+
+        self.primary_button_row = tk.Frame(self.controls_card, bg="#F7FBFF")
+        self.primary_button_row.grid(row=3, column=0, sticky="ew")
+        for column_index in range(3):
+            self.primary_button_row.grid_columnconfigure(column_index, weight=1, uniform="primary-actions")
+
+        self.start_button = self._make_action_button(self.primary_button_row, "start", self.start_openclaw)
+        self.stop_button = self._make_action_button(self.primary_button_row, "stop", self.stop_openclaw)
+        self.restart_button = self._make_action_button(self.primary_button_row, "restart", self.restart_openclaw)
+        for column_index, button in enumerate((self.start_button, self.stop_button, self.restart_button)):
+            button.grid(row=0, column=column_index, sticky="ew", padx=6, pady=6)
+
+        self.quick_actions_title = self._card_subtitle(self.controls_card)
+        self.quick_actions_title.grid(row=4, column=0, sticky="w", pady=(12, 6))
+
+        self.tool_button_row = tk.Frame(self.controls_card, bg="#F7FBFF")
+        self.tool_button_row.grid(row=5, column=0, sticky="ew")
+        for column_index in range(6):
+            self.tool_button_row.grid_columnconfigure(column_index, weight=1, uniform="quick-actions")
+
+        self.refresh_button = self._make_action_button(
+            self.tool_button_row,
+            "refresh",
+            lambda: self.refresh_status_async(True),
+            compact=True,
+        )
+        self.dashboard_button = self._make_action_button(self.tool_button_row, "dashboard", self.open_dashboard, compact=True)
+        self.browser_button = self._make_action_button(self.tool_button_row, "browser", self.open_browser_ui, compact=True)
+        self.kill_button = self._make_action_button(self.tool_button_row, "kill", self.kill_port_process, compact=True)
+        self.clear_log_button = self._make_action_button(self.tool_button_row, "clear", self.clear_log, compact=True)
+        self.exit_button = self._make_action_button(self.tool_button_row, "exit", self.on_exit, compact=True)
+        self._action_buttons = {
+            "start": self.start_button,
+            "stop": self.stop_button,
+            "restart": self.restart_button,
+            "refresh": self.refresh_button,
+            "dashboard": self.dashboard_button,
+            "browser": self.browser_button,
+            "kill": self.kill_button,
+            "clear": self.clear_log_button,
+            "exit": self.exit_button,
+        }
+
+        quick_buttons = [
             self.refresh_button,
             self.dashboard_button,
             self.browser_button,
@@ -382,13 +434,11 @@ class OpenClawManagerApp:
             self.clear_log_button,
             self.exit_button,
         ]
-        for index, button in enumerate(buttons, start=1):
-            row = ((index - 1) // 3) + 1
-            column = (index - 1) % 3
-            button.grid(row=row, column=column, sticky="ew", padx=6, pady=6)
+        for column_index, button in enumerate(quick_buttons):
+            button.grid(row=0, column=column_index, sticky="ew", padx=6, pady=6)
 
         self.shortcuts_title = self._card_subtitle(self.controls_card)
-        self.shortcuts_title.grid(row=4, column=0, sticky="w", pady=(14, 4))
+        self.shortcuts_title.grid(row=6, column=0, sticky="w", pady=(12, 4))
         self.shortcuts_label = tk.Label(
             self.controls_card,
             bg="#0E1D2C",
@@ -396,11 +446,11 @@ class OpenClawManagerApp:
             font=("Segoe UI", 9),
             justify="left",
             anchor="w",
-            wraplength=560,
+            wraplength=980,
             padx=12,
-            pady=10,
+            pady=8,
         )
-        self.shortcuts_label.grid(row=5, column=0, columnspan=3, sticky="ew")
+        self.shortcuts_label.grid(row=7, column=0, sticky="ew")
 
         self.settings_scroll = ScrollableFrame(self.settings_tab, background="#08131D")
         self.settings_scroll.pack(fill="both", expand=True)
@@ -515,10 +565,58 @@ class OpenClawManagerApp:
         self.refresh_interval_label.grid(row=3, column=1, sticky="w", padx=(14, 8), pady=6)
         self.refresh_interval_spinbox.grid(row=3, column=2, sticky="ew", pady=6)
 
+        self.console_tab.grid_columnconfigure(0, weight=1)
+        self.console_tab.grid_rowconfigure(0, weight=1)
+
+        self.console_card = self._make_card(self.console_tab, padding=(16, 16))
+        self.console_card.grid(row=0, column=0, sticky="nsew")
+        self.console_card.grid_rowconfigure(2, weight=1)
+        self.console_card.grid_columnconfigure(0, weight=1)
+
+        self.console_header = tk.Frame(self.console_card, bg="#F7FBFF")
+        self.console_header.grid(row=0, column=0, sticky="ew")
+        self.console_header.grid_columnconfigure(0, weight=1)
+
+        self.console_title = self._card_title(self.console_header)
+        self.console_title.grid(row=0, column=0, sticky="w")
+
+        self.clear_console_button = ttk.Button(
+            self.console_header,
+            command=self.clear_console,
+            style="Accent.TButton",
+        )
+        self.clear_console_button.grid(row=0, column=1, sticky="e")
+
+        self.console_hint = tk.Label(
+            self.console_card,
+            bg="#F7FBFF",
+            fg="#35506A",
+            font=("Segoe UI", 10),
+            justify="left",
+            anchor="w",
+            wraplength=980,
+        )
+        self.console_hint.grid(row=1, column=0, sticky="ew", pady=(8, 10))
+
+        self.console_text = scrolledtext.ScrolledText(
+            self.console_card,
+            wrap="word",
+            font=("Consolas", 10),
+            background="#061018",
+            foreground="#E6F2FF",
+            insertbackground="#F7FBFF",
+            relief="flat",
+            borderwidth=0,
+            padx=12,
+            pady=12,
+        )
+        self.console_text.grid(row=2, column=0, sticky="nsew")
+        self.console_text.configure(state="disabled")
+
         self.logs_tab.grid_columnconfigure(0, weight=1)
         self.logs_tab.grid_rowconfigure(0, weight=1)
 
-        self.log_card = self._make_card(self.logs_tab)
+        self.log_card = self._make_card(self.logs_tab, padding=(16, 16))
         self.log_card.grid(row=0, column=0, sticky="nsew")
         self.log_card.grid_rowconfigure(1, weight=1)
         self.log_card.grid_columnconfigure(0, weight=1)
@@ -602,8 +700,8 @@ class OpenClawManagerApp:
             highlightbackground=accent,
             highlightthickness=2,
             bd=0,
-            padx=16,
-            pady=14,
+            padx=14,
+            pady=12,
         )
         title_label = tk.Label(tile, bg=background, fg="#A8C4E0", font=("Segoe UI", 10))
         value_label = tk.Label(
@@ -611,7 +709,7 @@ class OpenClawManagerApp:
             textvariable=label_var,
             bg=background,
             fg=accent,
-            font=("Consolas", 14, "bold"),
+            font=("Consolas", 13, "bold"),
             anchor="w",
         )
         title_label.pack(anchor="w")
@@ -633,12 +731,24 @@ class OpenClawManagerApp:
             font=("Segoe UI Semibold", 10),
         )
 
-    def _make_action_button(self, parent: tk.Widget, variant: str, command: Callable[[], None]) -> tk.Button:
+    def _make_action_button(
+        self,
+        parent: tk.Widget,
+        variant: str,
+        command: Callable[[], None],
+        *,
+        compact: bool = False,
+    ) -> tk.Button:
         palette = self.action_palettes[variant]
         icon = self.button_icons.get(variant)
         if icon is None:
             icon = self.icon_factory.build(variant)
             self.button_icons[variant] = icon
+        font = ("Segoe UI Semibold", 10 if compact else 11)
+        padx = 10 if compact else 12
+        pady = 10 if compact else 12
+        wraplength = 100 if compact else 140
+        compound = "left" if compact else "top"
         button = tk.Button(
             parent,
             command=command,
@@ -652,12 +762,13 @@ class OpenClawManagerApp:
             bd=0,
             relief="flat",
             cursor="hand2",
-            font=("Segoe UI Semibold", 11),
-            padx=12,
-            pady=14,
-            wraplength=150,
+            font=font,
+            disabledforeground="#D0D9E3",
+            padx=padx,
+            pady=pady,
+            wraplength=wraplength,
             image=icon,
-            compound="top",
+            compound=compound,
         )
         self._bind_button_hover(button, palette["base"], palette["hover"])
         return button
@@ -722,9 +833,13 @@ class OpenClawManagerApp:
         self.banner_canvas.itemconfigure(self.banner_version_item, text=self.tr("version_badge", version=APP_VERSION_TAG))
         self.notebook.tab(self.control_tab, text=self.tr("section_controls"))
         self.notebook.tab(self.settings_tab, text=self.tr("section_settings"))
+        self.notebook.tab(self.console_tab, text=self.tr("section_console"))
         self.notebook.tab(self.logs_tab, text=self.tr("section_logs"))
 
         self.controls_title.configure(text=self.tr("section_controls"))
+        self.controls_summary.configure(text=self.tr("label_controls_summary"))
+        self.primary_actions_title.configure(text=self.tr("label_primary_actions"))
+        self.quick_actions_title.configure(text=self.tr("label_quick_actions"))
         self.start_button.configure(text=self.tr("button_start").upper())
         self.stop_button.configure(text=self.tr("button_stop").upper())
         self.restart_button.configure(text=self.tr("button_restart").upper())
@@ -755,6 +870,9 @@ class OpenClawManagerApp:
         self.port_runtime_label.configure(text=self.tr("label_port_runtime"))
         self.pid_label.configure(text=self.tr("label_pid"))
         self.version_label.configure(text=self.tr("label_version"))
+        self.console_title.configure(text=self.tr("section_console"))
+        self.console_hint.configure(text=self.tr("label_console_hint"))
+        self.clear_console_button.configure(text=self.tr("button_clear_console"))
         self.log_title.configure(text=self.tr("section_logs"))
         self._build_menu()
         self._apply_runtime_status(self.service.get_status(), False)
@@ -837,24 +955,36 @@ class OpenClawManagerApp:
         return new_value.isdigit() or new_value == ""
 
     def start_openclaw(self) -> None:
-        self._run_background_action(self.tr("button_start"), self.service.start_gateway)
+        self._show_console_tab()
+        self._run_background_action("start", self.tr("button_start"), self.service.start_gateway)
 
     def stop_openclaw(self) -> None:
-        self._run_background_action(self.tr("button_stop"), self.service.stop_gateway)
+        self._show_console_tab()
+        self._run_background_action("stop", self.tr("button_stop"), self.service.stop_gateway)
 
     def restart_openclaw(self) -> None:
-        self._run_background_action(self.tr("button_restart"), self.service.restart_gateway)
+        self._show_console_tab()
+        self._run_background_action("restart", self.tr("button_restart"), self.service.restart_gateway)
 
     def kill_port_process(self) -> None:
-        self._run_background_action(self.tr("button_kill"), self.service.kill_gateway_process)
+        self._show_console_tab()
+        self._run_background_action("kill", self.tr("button_kill"), self.service.kill_gateway_process)
 
     def open_dashboard(self) -> None:
-        self._run_background_action(self.tr("button_dashboard"), self.service.open_dashboard)
+        self._run_background_action("dashboard", self.tr("button_dashboard"), self.service.open_dashboard)
 
     def open_browser_ui(self) -> None:
-        self._run_background_action(self.tr("button_browser"), self.service.open_browser_ui)
+        self._run_background_action("browser", self.tr("button_browser"), self.service.open_browser_ui)
 
-    def _run_background_action(self, action_label: str, action: Callable[[], None]) -> None:
+    def _run_background_action(self, action_key: str, action_label: str, action: Callable[[], None]) -> None:
+        if self._closing:
+            return
+        if action_key in self._active_actions:
+            self.set_status_message(self.tr("status_action_running", action=action_label))
+            return
+
+        self._active_actions.add(action_key)
+        self._set_action_button_state(action_key, enabled=False)
         self.set_status_message(self.tr("status_busy", action=action_label))
 
         def worker() -> None:
@@ -863,9 +993,31 @@ class OpenClawManagerApp:
             except Exception as exc:
                 logging.getLogger("clawbot").exception("Error inesperado: %s", exc)
             finally:
-                self.root.after(0, lambda: self.refresh_status_async(False))
+                self._safe_after(0, lambda: self._finish_background_action(action_key))
 
         threading.Thread(target=worker, daemon=True, name=f"task-{action_label}").start()
+
+    def _finish_background_action(self, action_key: str) -> None:
+        self._active_actions.discard(action_key)
+        self._set_action_button_state(action_key, enabled=True)
+        self.refresh_status_async(True)
+
+    def _set_action_button_state(self, action_key: str, *, enabled: bool) -> None:
+        button = self._action_buttons.get(action_key)
+        if button is None:
+            return
+        button.configure(
+            state="normal" if enabled else "disabled",
+            cursor="hand2" if enabled else "arrow",
+        )
+
+    def _safe_after(self, delay_ms: int, callback: Callable[[], None]) -> str | None:
+        if self._closing:
+            return None
+        try:
+            return self.root.after(delay_ms, callback)
+        except (RuntimeError, tk.TclError):
+            return None
 
     def refresh_status_async(self, show_feedback: bool = False) -> None:
         if self._closing or self._status_refresh_in_progress:
@@ -879,9 +1031,9 @@ class OpenClawManagerApp:
                 status = self.service.get_status()
             except Exception as exc:
                 self.logger.exception("Error consultando el estado: %s", exc)
-                self.root.after(0, self._reset_status_refresh_flag)
+                self._safe_after(0, self._reset_status_refresh_flag)
                 return
-            self.root.after(0, lambda: self._apply_runtime_status(status, show_feedback))
+            self._safe_after(0, lambda: self._apply_runtime_status(status, show_feedback))
 
         threading.Thread(target=worker, daemon=True, name="status-refresh").start()
 
@@ -923,8 +1075,18 @@ class OpenClawManagerApp:
         except queue.Empty:
             pass
 
+        try:
+            while True:
+                line = self.console_queue.get_nowait()
+                self._append_console(line)
+        except queue.Empty:
+            pass
+
         if not self._closing:
             self.root.after(250, self._process_log_queue)
+
+    def _enqueue_console_output(self, text: str) -> None:
+        self.console_queue.put(text)
 
     def _append_log(self, text: str) -> None:
         self.log_text.configure(state="normal")
@@ -932,11 +1094,26 @@ class OpenClawManagerApp:
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
+    def _append_console(self, text: str) -> None:
+        self.console_text.configure(state="normal")
+        self.console_text.insert("end", text + "\n")
+        self.console_text.see("end")
+        self.console_text.configure(state="disabled")
+
     def clear_log(self) -> None:
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
         self.set_status_message(self.tr("button_clear_log"))
+
+    def clear_console(self) -> None:
+        self.console_text.configure(state="normal")
+        self.console_text.delete("1.0", "end")
+        self.console_text.configure(state="disabled")
+        self.set_status_message(self.tr("button_clear_console"))
+
+    def _show_console_tab(self) -> None:
+        self.notebook.select(self.console_tab)
 
     def set_status_message(self, message: str) -> None:
         self.status_bar_var.set(message)

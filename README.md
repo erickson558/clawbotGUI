@@ -9,6 +9,7 @@
 - Abre Dashboard y Browser UI desde la interfaz.
 - Libera el puerto configurado sin abrir ventanas de consola.
 - Muestra actividad en una bitácora visual y la escribe en `log.txt`.
+- Muestra la salida de OpenClaw en una consola embebida dentro de la propia GUI.
 - Soporta español e inglés.
 - Reorganiza la experiencia en pestañas para que toda la GUI siga siendo usable incluso con contenido adicional.
 - Usa botones con iconografía integrada para reforzar las acciones principales.
@@ -23,12 +24,15 @@
 - Autocierre configurable con countdown en la barra de estado.
 - Menú superior con About y atajos de teclado.
 - Navegación por pestañas para separar comandos, configuración y bitácora.
+- Nueva pestaña `Consola OpenClaw` para ver la salida silenciosa del proceso sin depender de una ventana CMD.
 - Panel de configuración con scroll para no perder controles por altura de ventana.
+- Pestaña de comandos reorganizada en acciones principales y herramientas rápidas para evitar cortes visuales.
 - Botones visuales con iconos generados en runtime.
 - Logging con timestamp y escritura atómica de configuración.
 - Llamadas a procesos en modo silencioso usando `CREATE_NO_WINDOW`.
 - Resolución robusta del ejecutable de OpenClaw en Windows, incluyendo shims `.cmd` de npm.
 - Ejecución oculta de wrappers `.cmd` y `.bat` de OpenClaw en Windows, manteniendo la salida integrada en la bitácora de la GUI.
+- Protección contra clics repetidos en operaciones largas para evitar acciones paralelas duplicadas.
 
 ## Estructura
 
@@ -60,7 +64,7 @@ python -m pip install -r requirements.txt
 .\build.ps1
 ```
 
-El ejecutable se genera como `clawbotGUI.exe` en la raíz del proyecto, sin ventana de consola. Del mismo modo, los procesos de OpenClaw lanzados desde la app mantienen su salida dentro de la bitácora visual.
+El ejecutable se genera como `clawbotGUI.exe` en la raíz del proyecto, sin ventana de consola. Del mismo modo, los procesos de OpenClaw lanzados desde la app mantienen su salida dentro de la consola embebida y de la bitácora visual.
 
 ## Versionado
 
