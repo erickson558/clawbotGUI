@@ -37,15 +37,26 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $version = python -c "from app_version import APP_VERSION; print(APP_VERSION)"
+          $versionFields = python -c "from app_version import APP_VERSION, APP_VERSION_TAG; print('|'.join((APP_VERSION, APP_VERSION_TAG)))"
+          if ($LASTEXITCODE -ne 0 -or -not $versionFields) {
+            throw "No se pudo leer la versión desde app_version.py"
+          }
+          $version, $tag = $versionFields.Trim() -split '\|', 2
           "value=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "asset=clawbotGUI-$tag.exe" >> $env:GITHUB_OUTPUT
+
+      - name: Prepare release asset
+        shell: pwsh
+        run: |
+          Copy-Item ".\clawbotGUI.exe" ".\${{ steps.version.outputs.asset }}" -Force
 
       - name: Create tag and release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v${{ steps.version.outputs.value }}"
+          $tag = "${{ steps.version.outputs.tag }}"
           $tagExists = git tag --list $tag
           if (-not $tagExists) {
             git tag $tag $env:GITHUB_SHA
@@ -54,7 +65,7 @@ jobs:
 
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag ".\clawbotGUI.exe" --clobber
+            gh release upload $tag ".\${{ steps.version.outputs.asset }}" --clobber
           } else {
-            gh release create $tag ".\clawbotGUI.exe" --generate-notes --title $tag
+            gh release create $tag ".\${{ steps.version.outputs.asset }}" --generate-notes --title $tag
           }

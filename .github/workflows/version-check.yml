@@ -1,0 +1,74 @@
+name: version-check
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate semantic version bump
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE_SHA="$PR_BASE_SHA"
+          else
+            BASE_SHA="$PUSH_BASE_SHA"
+          fi
+
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "Skipping version comparison because no base SHA is available."
+            exit 0
+          fi
+
+          export BASE_SHA
+
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+          import subprocess
+
+          pattern = re.compile(r'APP_VERSION = "(\d+)\.(\d+)\.(\d+)"')
+          base_sha = os.environ["BASE_SHA"]
+
+          current_text = Path("app_version.py").read_text(encoding="utf-8")
+          current_match = pattern.search(current_text)
+          if not current_match:
+              raise SystemExit("Could not read APP_VERSION from current app_version.py")
+
+          previous_text = subprocess.run(
+              ["git", "show", f"{base_sha}:app_version.py"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout
+          previous_match = pattern.search(previous_text)
+          if not previous_match:
+              raise SystemExit("Could not read APP_VERSION from base app_version.py")
+
+          current = tuple(int(part) for part in current_match.groups())
+          previous = tuple(int(part) for part in previous_match.groups())
+
+          if current <= previous:
+              raise SystemExit(
+                  f"APP_VERSION must increase for every change targeting main. Current={current} Previous={previous}"
+              )
+
+          print(f"Version bump validated: {previous} -> {current}")
+          PY

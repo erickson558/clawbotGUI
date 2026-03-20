@@ -1,5 +1,13 @@
 # Changelog
 
+## V0.0.10 - 2026-03-20
+
+- Estandarización del versionado visible en formato `Vx.y.z` con una única fuente de verdad en `app_version.py`.
+- Automatización ampliada para subir `patch`, `minor` o `major` y reservar la entrada correspondiente en `CHANGELOG.md`.
+- Release de GitHub alineada con la versión de la app, publicando tags `Vx.y.z` y assets versionados.
+- Compilación local reforzada para generar `clawbotGUI.exe` en la raíz del proyecto usando el `.ico` local y metadatos de versión de Windows.
+- Documentación de README, contribución, seguridad y dependencias actualizada para distribución bajo Apache License 2.0.
+
 ## V0.0.9 - 2026-03-20
 
 - Corrección de detección de runtime para reconocer tanto `openclaw.mjs gateway run` como el formato legado `dist/index.js gateway`.

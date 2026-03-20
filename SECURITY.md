@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-La versión activa soportada actualmente es `V0.0.9`.
+La versión soportada es siempre la release estable más reciente publicada desde `main`. La versión visible para usuarios, el ejecutable y el tag de GitHub salen de la misma fuente de verdad: [`app_version.py`](app_version.py).
 
 ## Runtime Security Notes
 
@@ -13,6 +13,7 @@ La versión activa soportada actualmente es `V0.0.9`.
 - La configuración se valida y sanea antes de usarse.
 - `config.json` y `log.txt` se generan localmente y no se publican en git.
 - La compilación del ejecutable se realiza en modo `--windowed` para evitar consola visible.
+- El ejecutable de Windows se compila con metadatos de versión alineados con `APP_VERSION_TAG`.
 
 ## Reporting
 
