@@ -1,5 +1,12 @@
 # Changelog
 
+## V0.0.9 - 2026-03-20
+
+- Corrección de detección de runtime para reconocer tanto `openclaw.mjs gateway run` como el formato legado `dist/index.js gateway`.
+- Prevención de dobles arranques cuando OpenClaw ya está vivo en otro puerto, evitando el error `gateway already running`.
+- La GUI vuelve a reflejar correctamente `Activo`, puerto real y PID efectivo aunque `config.json` tenga un puerto antiguo.
+- `Dashboard` y `Browser UI` ahora pueden resolver el puerto real del runtime cuando hay desfase entre configuración y ejecución.
+
 ## V0.0.8 - 2026-03-19
 
 - Corrección del arranque de OpenClaw en Windows para que la GUI use `~/.openclaw/gateway.cmd` en modo oculto y no dispare la tarea programada interactiva.

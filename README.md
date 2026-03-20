@@ -33,8 +33,10 @@
 - Resolución robusta del ejecutable de OpenClaw en Windows, incluyendo shims `.cmd` de npm.
 - Ejecución oculta de wrappers `.cmd` y `.bat` de OpenClaw en Windows, manteniendo la salida integrada en la bitácora de la GUI.
 - Inicio gestionado del gateway en Windows usando `~/.openclaw/gateway.cmd`, evitando que la GUI dispare la tarea programada interactiva que abría una consola externa.
+- Detección del runtime real tanto para el formato antiguo `dist/index.js gateway` como para el formato actual `openclaw.mjs gateway run`.
 - Protección contra clics repetidos en operaciones largas para evitar acciones paralelas duplicadas.
 - Detección de estado alineada con el proceso real de OpenClaw, incluso si el puerto efectivo no coincide con el configurado en la GUI.
+- Apertura de `Dashboard` y `Browser UI` usando el puerto real detectado cuando OpenClaw está corriendo fuera del puerto guardado en `config.json`.
 
 ## Estructura
 
@@ -53,7 +55,7 @@ La aplicación usa `config.json` en la misma carpeta del `.py` o `.exe`. Si no e
 
 En Windows, el campo `Comando OpenClaw` acepta `openclaw`, `openclaw.cmd`, `npx openclaw` o una ruta completa al ejecutable. La aplicación intenta resolver automáticamente los shims `.cmd` típicos de npm y los ejecuta en modo oculto para que no aparezca ninguna consola separada.
 
-Cuando detecta `~/.openclaw/gateway.cmd`, la GUI usa ese launcher foreground en modo oculto para iniciar el gateway sin pasar por `openclaw gateway start`. Eso evita que Windows abra una terminal externa desde la tarea programada. Si el puerto efectivo de OpenClaw no coincide con el configurado manualmente en la GUI, la tarjeta de estado mostrará el puerto real detectado.
+Cuando detecta `~/.openclaw/gateway.cmd`, la GUI usa ese launcher foreground en modo oculto para iniciar el gateway sin pasar por `openclaw gateway start`. Eso evita que Windows abra una terminal externa desde la tarea programada. Si el puerto efectivo de OpenClaw no coincide con el configurado manualmente en la GUI, la tarjeta de estado mostrará el puerto real detectado, evitará arrancar una segunda instancia y abrirá `Dashboard`/`Browser UI` usando los puertos activos del runtime.
 
 ## Ejecución local
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 import logging
 import os
@@ -11,7 +12,7 @@ import socket
 import subprocess
 import threading
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 import webbrowser
 
 
@@ -19,6 +20,7 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 PORT_PATTERN = re.compile(r":(\d+)$")
 WINDOWS_EXECUTABLE_SUFFIXES = (".cmd", ".bat", ".exe", ".com")
 WINDOWS_GATEWAY_TASK_NAME = "OpenClaw Gateway"
+WINDOWS_GATEWAY_PORT_ARG_PATTERN = re.compile(r"--port(?:\s+|=)(\d+)", re.IGNORECASE)
 
 
 class OpenClawService:
@@ -104,6 +106,18 @@ class OpenClawService:
             self._emit_console_line(f"OpenClaw ya parece estar activo en el puerto {actual_port}.")
             return
         if os.name == "nt":
+            existing_runtime = self._find_gateway_runtime_process()
+            if existing_runtime is not None:
+                pid = existing_runtime["pid"]
+                port = existing_runtime.get("port")
+                message = (
+                    f"OpenClaw ya tiene un proceso activo o iniciando (PID {pid}, puerto {port})."
+                    if port is not None
+                    else f"OpenClaw ya tiene un proceso activo o iniciando (PID {pid})."
+                )
+                self.logger.warning(message)
+                self._emit_console_line(message)
+                return
             self._start_gateway_windows_managed("Iniciar OpenClaw")
             return
         self._stream_command(self._command_with_args("gateway", "start"), "Iniciar OpenClaw")
@@ -164,15 +178,17 @@ class OpenClawService:
         if not self._is_safe_http_url(self.dashboard_url):
             self.logger.error("La URL configurada no es válida: %s", self.dashboard_url)
             return
-        webbrowser.open(self.dashboard_url, new=0, autoraise=True)
-        self.logger.info("Abriendo Dashboard: %s", self.dashboard_url)
+        target_url = self._resolve_runtime_dashboard_url()
+        webbrowser.open(target_url, new=0, autoraise=True)
+        self.logger.info("Abriendo Dashboard: %s", target_url)
 
     def open_browser_ui(self) -> None:
         if not self._is_safe_http_url(self.browser_url):
             self.logger.error("La URL configurada no es válida: %s", self.browser_url)
             return
-        webbrowser.open(self.browser_url, new=0, autoraise=True)
-        self.logger.info("Abriendo Browser UI: %s", self.browser_url)
+        target_url = self._resolve_runtime_browser_url()
+        webbrowser.open(target_url, new=0, autoraise=True)
+        self.logger.info("Abriendo Browser UI: %s", target_url)
 
     def _command_with_args(self, *extra_args: str) -> list[str]:
         base = shlex.split(self.command, posix=os.name != "nt")
@@ -451,20 +467,16 @@ class OpenClawService:
         if os.name != "nt":
             return []
 
-        script = rf"""
-$pattern = 'node_modules\\openclaw\\dist\\index\.js gateway'
+        script = r"""
 Get-CimInstance Win32_Process |
-    Where-Object {{
+    Where-Object {
         $_.Name -eq 'node.exe' -and
-        $_.CommandLine -match $pattern
-    }} |
-    ForEach-Object {{
-        $port = ''
-        if ($_.CommandLine -match '--port\s+(\d+)') {{
-            $port = $matches[1]
-        }}
-        '{{0}}|{{1}}' -f $_.ProcessId, $port
-    }}
+        $_.CommandLine
+    } |
+    ForEach-Object {
+        $cmd = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$_.CommandLine))
+        '{0}|{1}' -f $_.ProcessId, $cmd
+    }
 """
         try:
             output = subprocess.check_output(
@@ -482,13 +494,21 @@ Get-CimInstance Win32_Process |
             line = raw_line.strip()
             if not line:
                 continue
-            pid_text, _, port_text = line.partition("|")
+            pid_text, _, encoded_command = line.partition("|")
             if not pid_text.isdigit():
                 continue
+            try:
+                command_line = base64.b64decode(encoded_command).decode("utf-8", errors="ignore")
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if not self._is_gateway_runtime_command(command_line):
+                continue
+            port = self._extract_port_from_command_line(command_line)
             processes.append(
                 {
                     "pid": pid_text,
-                    "port": int(port_text) if port_text.isdigit() else None,
+                    "port": port,
+                    "command_line": command_line,
                 }
             )
         return processes
@@ -500,11 +520,98 @@ Get-CimInstance Win32_Process |
             if port is None or pid is None:
                 continue
             if self.is_port_open("127.0.0.1", int(port)):
+                listener_pid = self.get_pid_by_port(int(port))
                 return {
-                    "pid": str(pid),
+                    "pid": str(listener_pid or pid),
                     "port": int(port),
                 }
         return None
+
+    def _find_gateway_runtime_process(self) -> dict[str, str | int | None] | None:
+        processes = self._find_gateway_processes()
+        if not processes:
+            return None
+
+        for process in processes:
+            port = process.get("port")
+            if port is not None and self.is_port_open("127.0.0.1", int(port)):
+                return process
+        return processes[0]
+
+    def _resolve_runtime_dashboard_url(self) -> str:
+        status = self.get_status()
+        if not bool(status["running"]) or not bool(status.get("port_mismatch")):
+            return self.dashboard_url
+        return self._replace_url_port(self.dashboard_url, int(status["port"]))
+
+    def _resolve_runtime_browser_url(self) -> str:
+        status = self.get_status()
+        if not bool(status["running"]):
+            return self.browser_url
+
+        actual_gateway_port = int(status["port"])
+        actual_browser_port = self._find_browser_runtime_port(str(status.get("pid") or ""), actual_gateway_port)
+        if actual_browser_port is None:
+            return self.browser_url
+        return self._replace_url_port(self.browser_url, actual_browser_port)
+
+    def _find_browser_runtime_port(self, pid: str, gateway_port: int) -> int | None:
+        listening_ports = self._get_listening_ports_by_pid(pid)
+        candidates = sorted(port for port in listening_ports if port != gateway_port)
+        if candidates:
+            return candidates[0]
+
+        fallback_port = gateway_port + 2
+        if self.is_port_open("127.0.0.1", fallback_port):
+            return fallback_port
+        return None
+
+    def _get_listening_ports_by_pid(self, pid: str) -> set[int]:
+        if not pid or not pid.isdigit():
+            return set()
+
+        try:
+            output = subprocess.check_output(
+                ["netstat", "-ano", "-p", "tcp"],
+                text=True,
+                stderr=subprocess.STDOUT,
+                timeout=10,
+                **self._base_process_kwargs(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return set()
+
+        ports: set[int] = set()
+        for line in output.splitlines():
+            parts = line.split()
+            if len(parts) < 5 or parts[-1] != pid:
+                continue
+            if "LISTEN" not in line.upper():
+                continue
+            port = self._extract_port(parts[1])
+            if port is not None:
+                ports.add(port)
+        return ports
+
+    @staticmethod
+    def _replace_url_port(source_url: str, port: int) -> str:
+        parsed = urlparse(source_url)
+        if not parsed.hostname:
+            return source_url
+
+        hostname = parsed.hostname
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = f"[{hostname}]"
+
+        credentials = ""
+        if parsed.username:
+            credentials = parsed.username
+            if parsed.password:
+                credentials += f":{parsed.password}"
+            credentials += "@"
+
+        netloc = f"{credentials}{hostname}:{port}"
+        return urlunparse(parsed._replace(netloc=netloc))
 
     def _wait_for_gateway_shutdown(self, timeout_seconds: float) -> bool:
         deadline = time.monotonic() + timeout_seconds
@@ -590,6 +697,27 @@ Get-CimInstance Win32_Process |
             return int(match.group(1))
         except ValueError:
             return None
+
+    @staticmethod
+    def _extract_port_from_command_line(command_line: str) -> int | None:
+        match = WINDOWS_GATEWAY_PORT_ARG_PATTERN.search(command_line)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _is_gateway_runtime_command(command_line: str) -> bool:
+        normalized = " ".join(command_line.lower().split())
+        if "node_modules\\openclaw" not in normalized and "node_modules/openclaw" not in normalized:
+            return False
+        if " gateway status" in normalized or " gateway stop" in normalized or " gateway start" in normalized:
+            return False
+        if " gateway run" in normalized:
+            return True
+        return bool(re.search(r"dist[\\/]+index\.js(?:\"|\s)+gateway(?:\s|$)", normalized))
 
     @staticmethod
     def _is_safe_http_url(value: str) -> bool:
