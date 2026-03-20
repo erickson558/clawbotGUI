@@ -9,6 +9,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import threading
 import time
 from urllib.parse import urlparse
 import webbrowser
@@ -29,6 +30,8 @@ class OpenClawService:
     ) -> None:
         self.logger = logger
         self.console_callback = console_callback
+        self._managed_process_lock = threading.Lock()
+        self._managed_gateway_process: subprocess.Popen[str] | None = None
         self.reload_settings(settings)
 
     def reload_settings(self, settings: dict[str, object]) -> None:
@@ -94,9 +97,14 @@ class OpenClawService:
         return None
 
     def start_gateway(self) -> None:
-        if self.is_port_open("127.0.0.1", self.gateway_port):
-            self.logger.info("OpenClaw ya parece estar activo.")
-            self._emit_console_line("OpenClaw ya parece estar activo.")
+        status = self.get_status()
+        if bool(status["running"]):
+            actual_port = status["port"]
+            self.logger.info("OpenClaw ya parece estar activo en el puerto %s.", actual_port)
+            self._emit_console_line(f"OpenClaw ya parece estar activo en el puerto {actual_port}.")
+            return
+        if os.name == "nt":
+            self._start_gateway_windows_managed("Iniciar OpenClaw")
             return
         self._stream_command(self._command_with_args("gateway", "start"), "Iniciar OpenClaw")
 
@@ -112,7 +120,7 @@ class OpenClawService:
             if os.name == "nt":
                 self._stop_gateway_windows_fast()
                 time.sleep(1)
-                self._stream_command(self._command_with_args("gateway", "start"), "Reiniciar OpenClaw")
+                self._start_gateway_windows_managed("Reiniciar OpenClaw")
                 return
 
             stop_command = self._prepare_command(self._command_with_args("gateway", "stop"))
@@ -139,6 +147,7 @@ class OpenClawService:
             self.logger.exception(">>> ERROR al reiniciar: %s", exc)
 
     def kill_gateway_process(self) -> None:
+        self._terminate_managed_gateway_process()
         if os.name == "nt":
             self._end_windows_task(WINDOWS_GATEWAY_TASK_NAME)
         pids = self._collect_gateway_process_ids()
@@ -251,10 +260,127 @@ class OpenClawService:
             self.logger.exception(">>> ERROR en %s: %s", label, exc)
             self._emit_console_line(f"ERROR: {exc}")
 
+    def _start_gateway_windows_managed(self, label: str) -> None:
+        command, env_overrides = self._resolve_windows_gateway_command()
+        self.logger.info(">>> %s: %s", label, " ".join(command))
+        self._emit_console_line(f"$ {' '.join(command)}")
+        self._terminate_managed_gateway_process()
+        self._end_windows_task(WINDOWS_GATEWAY_TASK_NAME)
+
+        proc = self._launch_streaming_process(command, label, env_overrides=env_overrides)
+        if proc is None:
+            return
+
+        self._set_managed_gateway_process(proc)
+        threading.Thread(
+            target=self._stream_managed_gateway_output,
+            args=(proc,),
+            daemon=True,
+            name="openclaw-managed-output",
+        ).start()
+
+        status = self._wait_for_gateway_startup(proc, timeout_seconds=35.0)
+        if status is not None:
+            self.logger.info(
+                ">>> %s listo en puerto %s con PID %s",
+                label,
+                status["port"],
+                status["pid"] or "-",
+            )
+            self._emit_console_line(
+                f"[{label}] gateway activo en puerto {status['port']} (PID {status['pid'] or '-'})"
+            )
+            return
+
+        exit_code = proc.poll()
+        if exit_code is not None:
+            self.logger.error(">>> %s terminó antes de quedar en línea con código %s", label, exit_code)
+            self._emit_console_line(f"[{label}] terminó antes de quedar en línea: {exit_code}")
+            return
+
+        self.logger.warning(">>> %s sigue iniciando, pero aún no respondió en el puerto esperado.", label)
+        self._emit_console_line(f"[{label}] sigue iniciando, pero aún no respondió en el puerto esperado.")
+
+    def _resolve_windows_gateway_command(self) -> tuple[list[str], dict[str, str] | None]:
+        gateway_script = Path.home() / ".openclaw" / "gateway.cmd"
+        if gateway_script.is_file():
+            return [str(gateway_script)], None
+        return self._command_with_args("gateway", "run", "--force", "--port", str(self.gateway_port)), None
+
+    def _launch_streaming_process(
+        self,
+        command: list[str],
+        label: str,
+        env_overrides: dict[str, str] | None = None,
+    ) -> subprocess.Popen[str] | None:
+        prepared_command = self._prepare_command(command)
+        try:
+            env = os.environ.copy()
+            if env_overrides:
+                env.update(env_overrides)
+            return subprocess.Popen(
+                prepared_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=env,
+                **self._base_process_kwargs(),
+            )
+        except FileNotFoundError as exc:
+            self.logger.error(">>> ERROR en %s: %s", label, exc)
+            self._emit_console_line(f"ERROR: {exc}")
+        except Exception as exc:
+            self.logger.exception(">>> ERROR en %s: %s", label, exc)
+            self._emit_console_line(f"ERROR: {exc}")
+        return None
+
+    def _stream_managed_gateway_output(self, proc: subprocess.Popen[str]) -> None:
+        try:
+            if proc.stdout is not None:
+                for line in iter(proc.stdout.readline, ""):
+                    if not line:
+                        continue
+                    cleaned = line.rstrip()
+                    self.logger.info(cleaned)
+                    self._emit_console_line(cleaned)
+                proc.stdout.close()
+            return_code = proc.wait()
+            self.logger.info(">>> Gateway OpenClaw finalizado con código %s", return_code)
+            self._emit_console_line(f"[Gateway OpenClaw] código de salida: {return_code}")
+        except Exception as exc:
+            self.logger.exception(">>> ERROR leyendo la salida del gateway: %s", exc)
+            self._emit_console_line(f"ERROR: {exc}")
+        finally:
+            self._clear_managed_gateway_process(proc)
+
+    def _wait_for_gateway_startup(
+        self,
+        proc: subprocess.Popen[str],
+        timeout_seconds: float,
+    ) -> dict[str, object] | None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            status = self.get_status()
+            if bool(status["running"]):
+                return status
+            if proc.poll() is not None:
+                return None
+            time.sleep(0.5)
+        status = self.get_status()
+        if bool(status["running"]):
+            return status
+        return None
+
     def _stop_gateway_windows_fast(self) -> None:
         command = self._command_with_args("gateway", "stop")
         self.logger.info(">>> Detener OpenClaw: %s", " ".join(command))
         self._emit_console_line(f"$ {' '.join(command)}")
+
+        managed_wrapper_stopped = self._terminate_managed_gateway_process()
+        if managed_wrapper_stopped:
+            self.logger.info(">>> Wrapper oculto del gateway finalizado.")
+            self._emit_console_line("Wrapper oculto del gateway finalizado.")
 
         task_ended = self._end_windows_task(WINDOWS_GATEWAY_TASK_NAME)
         if task_ended:
@@ -387,6 +513,33 @@ Get-CimInstance Win32_Process |
                 return True
             time.sleep(0.2)
         return not self._collect_gateway_process_ids() and not self.is_port_open("127.0.0.1", self.gateway_port)
+
+    def _set_managed_gateway_process(self, proc: subprocess.Popen[str]) -> None:
+        with self._managed_process_lock:
+            self._managed_gateway_process = proc
+
+    def _clear_managed_gateway_process(self, proc: subprocess.Popen[str] | None = None) -> None:
+        with self._managed_process_lock:
+            if proc is None or self._managed_gateway_process is proc:
+                self._managed_gateway_process = None
+
+    def _terminate_managed_gateway_process(self) -> bool:
+        with self._managed_process_lock:
+            proc = self._managed_gateway_process
+            self._managed_gateway_process = None
+
+        if proc is None or proc.poll() is not None:
+            return False
+
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        except OSError:
+            return False
+        return True
 
     def _emit_console_line(self, text: str) -> None:
         if not text or self.console_callback is None:

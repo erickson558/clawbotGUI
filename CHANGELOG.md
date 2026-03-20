@@ -1,5 +1,11 @@
 # Changelog
 
+## V0.0.8 - 2026-03-19
+
+- Corrección del arranque de OpenClaw en Windows para que la GUI use `~/.openclaw/gateway.cmd` en modo oculto y no dispare la tarea programada interactiva.
+- Eliminación práctica de la ventana de consola externa al iniciar desde la aplicación, manteniendo la salida solo en la pestaña `Consola OpenClaw`.
+- Validación del flujo completo `start/stop/status` con la tarea programada permaneciendo en estado `Listo` mientras la app gestiona el proceso.
+
 ## V0.0.7 - 2026-03-19
 
 - Corrección de la detección de estado para que la GUI identifique el gateway real aunque OpenClaw esté escuchando en un puerto distinto al configurado manualmente.
